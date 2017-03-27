@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <strings.h> /* for bzero */
+#include <string.h> /* for strlen */
 
 #define TANK_PORT 10127
 typedef struct sockaddr SA;
@@ -16,6 +17,17 @@ typedef struct sockaddr SA;
 #define MAX_LINE (4096)
 #endif
 
+static int open_max = FD_SETSIZE;
+static int fds[FD_SETSIZE];
+
+static void tell_all(int fd, const char buf[], int len)
+{
+	for(int i=1;i<open_max;i++)
+		if(fds[i]!=-1)
+			if(write(fds[i], buf, len)!=len)
+				perror("write error");
+}
+
 int main(int argc, const char * argv[])
 {
 /*
@@ -23,10 +35,8 @@ int main(int argc, const char * argv[])
 	if(open_max<0)
 		perror("sysconf error"),exit(1);
 */
-	long open_max = FD_SETSIZE;
-	printf("Open_max: %ld.\n",open_max);
+	printf("Open_max: %d.\n",open_max);
 
-	int fds[open_max];
 	int maxid;
 	int sockfd, clientfd;
 	socklen_t clilen;
@@ -37,7 +47,7 @@ int main(int argc, const char * argv[])
 	bzero(&server, sizeof(server));
 	server.sin_family = AF_INET;
 	server.sin_port   = htons(TANK_PORT);
-	server.sin_addr.s_addr = htons(INADDR_ANY);
+	server.sin_addr.s_addr = htonl(INADDR_ANY);
 
 	if(bind(sockfd, (SA*)&server, sizeof(server))<0)
 		perror("bind error"),exit(1);
@@ -65,7 +75,6 @@ int main(int argc, const char * argv[])
 		if((n=select(maxid+1,&readfds,NULL,NULL,NULL))<0)
 			perror("select error"),exit(1);
 
-		printf("Amount: %d.\n",n);
 		if(FD_ISSET(sockfd,&readfds))
 		{
 			clilen = sizeof(client);
@@ -74,25 +83,35 @@ int main(int argc, const char * argv[])
 				perror("accept error");
 				continue;
 			}
+
 			if(clientfd>maxid)
 				maxid = clientfd;
 
-			for(int i=1;i<open_max;i++)
+			int i;
+			for(i=1;i<open_max;i++)
+			{
 				if(fds[i]==-1)
+				{
 					fds[i] = clientfd;
+					break;
+				}
+			}
 			
 			if(i>=open_max)
 			{
-				printf("To many connections.\n");
+				sprintf(buf,"To many connections.\n");
+				write(clientfd, buf, strlen(buf));
 				close(clientfd);
 				continue;	
 			}
 
 			FD_SET(clientfd,&allfds);
 
-			printf("Client %s:%d connect.\n",
+			sprintf(buf,"%s:%d connected.\n",
 					inet_ntoa(client.sin_addr),
 					ntohs(client.sin_port)); 	
+
+			tell_all(sockfd, buf, strlen(buf));
 
 			if(--n==0)
 				continue;
@@ -105,29 +124,30 @@ int main(int argc, const char * argv[])
 			{
 				if((n=read(fds[i],buf,sizeof(buf)))>0)
 				{
-					if(write(fds[i],buf,n)!=n)
-						perror("write error");
-					FD_SET(fds[i],&allfds);
+					printf("size: %d.\n",n);
+					tell_all(fds[i], buf, n);
 				}
 				else if(n==0)
 				{
 					printf("client is closed.\n");
+					FD_CLR(fds[i],&allfds);	
 					close(fds[i]);
 					fds[i] = -1;
-					FD_CLR(fds[i],&allfds);	
-				
 				}
 				else
 				{	
-					fds[i] = -1;
 					FD_CLR(fds[i],&allfds);	
 					perror("read error");
-					close(clientfd);
+					close(fds[i]);
+					fds[i] = -1;
 				}
+
 				if(--n==0)
 					continue;	
 			}
 		}
+
+	}
 
 	exit(0);
 }

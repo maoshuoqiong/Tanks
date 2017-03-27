@@ -34,23 +34,48 @@ int main(int argc, const char* argv[])
 		perror("connect error"),exit(1);
 
 	char buf[MAX_LINE];
-	int n;
+	int n, num;
 
-	while((n=read(STDIN_FILENO,buf,sizeof(buf))) > 0 )
+	fd_set readfds, allfds;
+	FD_ZERO(&allfds);
+	FD_SET(STDIN_FILENO, &allfds);
+	FD_SET(sockfd, &allfds);
+
+	while(1)
 	{
-		if(write(sockfd,buf,n)!=n)
+		readfds = allfds;
+		if((num = select(sockfd+1, &readfds, NULL, NULL, NULL))<0)	/* return 0 when time out */
+			perror("select error"),exit(1);
+	
+		if(FD_ISSET(STDIN_FILENO, &readfds))
 		{
-			perror("write error");
-			break;
+			if((n=read(STDIN_FILENO,buf,sizeof(buf))) > 0 )
+			{
+				if(write(sockfd,buf,n)!=n)
+				{
+					perror("write error");
+					break;
+				}
+			}
+			else if(n == 0)
+				printf("EOF\n"),exit(0);
+			else
+				perror("read from stdin error"),exit(1);
 		}
 
-		n = read(sockfd,buf,sizeof(buf));
-		if(n == 0)
-			printf("server is close"),exit(1);
-		else if(n<0)
-			perror("read error"),exit(1);
-		else
-			write(STDOUT_FILENO,buf,n);
+		if(FD_ISSET(sockfd, &readfds))
+		{
+			n = read(sockfd,buf,sizeof(buf));
+			if(n == 0)
+				printf("server is close\n"),exit(1);
+			else if(n<0)
+				perror("read error"),exit(1);
+			else
+			{
+				buf[n] = '\n';
+				write(STDOUT_FILENO,buf,n);
+			}
+		}
 	}
 
 
