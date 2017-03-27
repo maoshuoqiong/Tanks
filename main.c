@@ -18,9 +18,12 @@ typedef struct sockaddr SA;
 
 int main(int argc, const char * argv[])
 {
+/*
 	long open_max = sysconf(_SC_OPEN_MAX);
 	if(open_max<0)
 		perror("sysconf error"),exit(1);
+*/
+	long open_max = FD_SETSIZE;
 	printf("Open_max: %ld.\n",open_max);
 
 	int fds[open_max];
@@ -42,17 +45,23 @@ int main(int argc, const char * argv[])
 	if(listen(sockfd,5)<0)
 		perror("listen error"),exit(1);
 
+	/* init fds */
+	for(int i=1;i<open_max;i++)
+		fds[i] = -1;
+
 	maxid = sockfd;
 
-	fd_set readfds;
-	FD_ZERO(&readfds);
+	fd_set readfds, allfds;
+	FD_ZERO(&allfds);
+	FD_SET(sockfd,&allfds);
+	fds[0] = sockfd;
 
 	char buf[MAX_LINE];
 	int n;
 
 	while(1)
 	{
-		FD_SET(sockfd,&readfds);
+		readfds = allfds;
 		if((n=select(maxid+1,&readfds,NULL,NULL,NULL))<0)
 			perror("select error"),exit(1);
 
@@ -68,34 +77,58 @@ int main(int argc, const char * argv[])
 			if(clientfd>maxid)
 				maxid = clientfd;
 
-			FD_SET(clientfd,&readfds);
+			for(int i=1;i<open_max;i++)
+				if(fds[i]==-1)
+					fds[i] = clientfd;
+			
+			if(i>=open_max)
+			{
+				printf("To many connections.\n");
+				close(clientfd);
+				continue;	
+			}
+
+			FD_SET(clientfd,&allfds);
 
 			printf("Client %s:%d connect.\n",
 					inet_ntoa(client.sin_addr),
 					ntohs(client.sin_port)); 	
+
+			if(--n==0)
+				continue;
+				
 		}		
 
-
-		if(FD_ISSET(clientfd,&readfds))
+		for(int i=1; i<open_max;i++)
 		{
-			if((n=read(clientfd,buf,sizeof(buf)))>0)
+			if(FD_ISSET(fds[i],&readfds))
 			{
-				if(write(clientfd,buf,n)!=n)
-					perror("write error");
-				FD_SET(clientfd,&readfds);
-			}
-			else if(n==0)
-			{
-				printf("client is closed.\n");
-				close(clientfd);
-			}
-			else
-			{	
-				perror("read error");
-				close(clientfd);
+				if((n=read(fds[i],buf,sizeof(buf)))>0)
+				{
+					if(write(fds[i],buf,n)!=n)
+						perror("write error");
+					FD_SET(fds[i],&allfds);
+				}
+				else if(n==0)
+				{
+					printf("client is closed.\n");
+					close(fds[i]);
+					fds[i] = -1;
+					FD_CLR(fds[i],&allfds);	
+				
+				}
+				else
+				{	
+					fds[i] = -1;
+					FD_CLR(fds[i],&allfds);	
+					perror("read error");
+					close(clientfd);
+				}
+				if(--n==0)
+					continue;	
 			}
 		}
-	}
+
 	exit(0);
 }
 
